@@ -1,0 +1,66 @@
+{
+ "n_movies": 553,
+ "n_assets": 11060,
+ "n_users": 19892,
+ "train_impressions": 76000,
+ "train_ctr": 0.2395657894736842,
+ "crop_invariance": {
+  "same_variant_diff_canvas": 0.7839648997783661,
+  "same_movie_diff_variant": 0.5574908059835434,
+  "different_movies": 0.28372730672359464
+ },
+ "ips": {
+  "V2 unified, ID-only": {
+   "billboard": 0.129,
+   "vertical": 0.437,
+   "landscape": 0.264,
+   "short_panel": 0.093,
+   "panel": 0.289
+  },
+  "V3 unified, ID+CLIP": {
+   "billboard": 0.142,
+   "vertical": 0.473,
+   "landscape": 0.322,
+   "short_panel": 0.105,
+   "panel": 0.296
+  },
+  "V1 per-canvas, ID+CLIP": {
+   "billboard": 0.13,
+   "vertical": 0.415,
+   "landscape": 0.259,
+   "short_panel": 0.085,
+   "panel": 0.306
+  },
+  "random policy": {
+   "billboard": 0.135,
+   "vertical": 0.4348,
+   "landscape": 0.2678,
+   "short_panel": 0.0882,
+   "panel": 0.287
+  }
+ },
+ "ips_lift_pct": {
+  "V2 unified, ID-only": {
+   "billboard": -4.44,
+   "vertical": 0.52,
+   "landscape": -1.4,
+   "short_panel": 5.38,
+   "panel": 0.7
+  },
+  "V3 unified, ID+CLIP": {
+   "billboard": 5.19,
+   "vertical": 8.8,
+   "landscape": 20.26,
+   "short_panel": 18.98,
+   "panel": 3.14
+  },
+  "V1 per-canvas, ID+CLIP": {
+   "billboard": -3.7,
+   "vertical": -4.54,
+   "landscape": -3.27,
+   "short_panel": -3.68,
+   "panel": 6.62
+  }
+ },
+ "probe_acc": 0.35454545454545455
+}
