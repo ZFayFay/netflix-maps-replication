@@ -1,91 +1,105 @@
-# I rebuilt Netflix's artwork personalization system on MovieLens. Here's what actually matters.
+# Netflix fixed cold-start with two ideas. Either one alone does nothing.
 
-*Netflix published MAPS in August 2026: how they pick which artwork to show you, and how CLIP embeddings fixed their cold-start problem. The paper is great but you can't touch it. So I rebuilt the mechanics on public data. Code on [GitHub](https://github.com/ZFayFay/netflix-maps-replication), notebook on Kaggle.*
+## I rebuilt Netflix's artwork personalization on MovieLens. The lesson is about combinations, not features.
 
----
+*Part 1 of **Netflix Tech Blog, rebuilt**. [Part 2: the billboard bandit](https://medium.com/@faycal.zouine.usa/i-rebuilt-netflixs-billboard-bandit-the-metric-picked-the-winner-686296a3b72f) · [Part 3: what recommendations are worth](https://medium.com/@faycal.zouine.usa/your-dashboard-says-recommendations-multiply-viewing-by-7-5-the-truth-is-3-1-a7b68e8334c3)*
 
-## The problem Netflix was solving
+*6-minute read. In a hurry? Read the bold lines.*
 
-Every title on Netflix has many artworks. Which one you see is a personalization problem. Their old models learned from clicks, but treated every artwork as an opaque ID. The model never saw the image.
+Every new title on Netflix arrives with the same handicap. Its artwork has never been clicked. So a model that learns from clicks knows nothing about it.
 
-That works fine for old titles. It fails completely for new ones. A new artwork has no click history, so an ID-based model knows nothing about it. Netflix had to fall back to popularity and wait for data. That's cold-start.
+That's cold-start. And Netflix's older artwork models had it bad. They treated each image as an ID number. The model never actually *saw* the picture.
 
-Their fix is simple to state: encode every artwork with CLIP, and concatenate that embedding with the learned ID embedding. Now a brand-new asset arrives with a vector the model already understands. If you click on artwork featuring a certain comedian, that preference lives in image space, not ID space — so it transfers to a title the model has never seen.
+In August 2026, Netflix published [MAPS](https://netflixtechblog.com/maps-netflixs-multimodal-asset-personalization-at-scale-32f96320785e), their fix. I rebuilt it on public data to see what really drives it.
 
-The second win: they collapsed five models (one per artwork canvas: billboard, vertical, landscape, and so on) into one. CLIP embeddings barely change under crop and resize, so the renderings of one image across canvases map to nearly the same vector. One model can pool signal across all of them. I checked this on real posters: the five canvas renders of one artwork have mean cosine 0.78 with each other, vs 0.56 for different crops of the same poster.
+The short answer: two ideas. Neither works alone.
 
-## What I could and couldn't replicate
+> When a feature "doesn't help," look for the second thing it needs.
+
+## The two ideas
+
+**Idea 1: let the model see the image.** Run every artwork through CLIP (a model that turns an image into a list of numbers that capture what's in it). Glue those numbers to the old ID. Now a brand-new artwork shows up with a description the model already understands.
+
+**Idea 2: one model instead of five.** Netflix shows artwork in five shapes (billboard, vertical, landscape and so on). They used to train one model per shape. MAPS trains one shared model.
+
+Why can one model handle five shapes? Because CLIP barely cares about cropping. I checked on real posters: the five shapes of one image score 0.78 similarity with each other, vs 0.56 for different crops of the same poster.
+
+**Same picture, different crop, almost the same numbers. So the shapes can share what they learn.**
+
+## What's real, what's simulated
 
 Honesty first, because it shapes everything.
 
-**Real:** MovieLens ratings, real movie posters, real CLIP embeddings, the paper's architecture, their offline evaluation method, their linear-probe trick.
+Real: 890k MovieLens ratings, real movie posters, real CLIP, Netflix's architecture and their evaluation method.
 
-**Simulated:** the impression logs. No public dataset has artwork impressions and clicks. So I simulated them from explicit, numbered assumptions. User taste = the average CLIP embedding of posters they actually rated highly. Click probability = a function of taste match plus a global "this artwork just works" term. Every assumption is written down in the notebook.
+Simulated: the clicks. No public dataset logs artwork impressions. So I simulated them, with every assumption written down in the notebook.
 
-One more thing I won't hide: the simulation is built in CLIP space, and the winning model uses CLIP features. So the setup favors it by construction. This rebuild demonstrates the *mechanism*. It cannot prove real-world effect sizes. Netflix's proof was a month-long A/B test. Mine is a controlled sandbox.
-
-## The setup
-
-MovieLens gives ~890k real ratings with poster URLs. From each poster I cut four "artwork variants" (different crops showing different content — a face, title text, a scene) and render each variant on five canvases with different aspect ratios. 553 movies × 20 = 11,060 assets — my stand-in for Netflix's artwork catalog.
-
-Then one CLIP pass over all of it. One vector per asset, saved to a numpy file. That file is a toy version of their Embedding Store: encode once, serve to every downstream model.
-
-20% of movies are held out as cold-start. Their impressions never touch training.
+One more thing. My simulated users have tastes built from CLIP, and the winning model uses CLIP. That stacks the deck. **So this shows the mechanism, not the size of the effect.** Netflix's proof is their A/B test. Mine is a sandbox.
 
 ## The bug that taught me the most
 
-My first run failed in an instructive way. Every model — with CLIP, without CLIP — scored exactly like random picking. The reason: raw CLIP vectors are not spread around the sphere. They live in a narrow cone. The mean cosine between embeddings of completely unrelated movies was 0.28, not 0. So the cosine between a user's taste vector and the four crops of one poster was nearly identical for all four — no signal, nothing to personalize.
+My first run failed. Every model, with or without CLIP, scored like random guessing.
 
-The fix is one line: subtract the mean embedding and renormalize before computing similarities. After centering, the best crop for a user gets a simulated click probability of ~0.20 vs ~0.06 for the worst. If you use CLIP cosines as a similarity signal anywhere, center first.
+The cause: CLIP vectors all point roughly the same way. Two completely unrelated movies still scored 0.28 similarity, not 0. So all four crops of a poster looked equally good to every user. Nothing to personalize.
 
-## The ablation that teaches the real lesson
+The fix is one line. Subtract the average vector first (centering). After that, a user's best crop got a click chance of about 0.20, vs about 0.06 for the worst.
 
-Netflix tested three variants, and this is the part worth internalizing:
+**If you use CLIP similarities anywhere, center them first.**
 
-- **V1:** five per-canvas models, each with CLIP embeddings added
-- **V2:** one unified model across all canvases, IDs only
-- **V3:** one unified model, with CLIP
+## The result: only the combination wins
 
-In their online A/B test, **V1 and V2 did nothing on their own. Only V3 moved the metrics.**
+Netflix tested three versions. I rebuilt all three and scored them on movies the model had never seen:
 
-My rebuild reproduces the same pattern on cold-start movies, measured as IPS lift over a random policy: V2 (ID-only) and V1 (per-canvas + CLIP) bounce between −5% and +7% — noise. V3 is positive on all five canvases: +5% on billboard, +9% vertical, +20% landscape, +19% short-panel, +3% panel. A new asset is just an unseen ID for V2; a sparse canvas gives V1 too few examples to use the image content.
+- **V1:** five separate models, with CLIP
+- **V2:** one shared model, no CLIP
+- **V3:** one shared model, with CLIP
 
-The two ingredients need each other. CLIP tells a model what an image contains, but a sparse canvas has too few examples to learn how to use that. Consolidation supplies the data, but ID-only data transfers nothing to a new asset. Together, the rich canvases teach the shared model how image content maps to taste, and that mapping transfers straight to the sparse canvases.
+V1 and V2 bounced between −5% and +7% vs random. That's noise. V3 won on all five shapes: +5% billboard, +9% vertical, +20% landscape, +19% short panel, +3% panel.
 
-The lesson I'd take into any ML project: when a feature "doesn't help," look for a second blocking factor before throwing the feature away.
+![IPS lift by canvas](https://raw.githubusercontent.com/ZFayFay/netflix-maps-replication/main/figures/fig2_ips.png)
 
-## IPS: the most transferable idea in the paper
+Netflix saw the same thing in their live test. V1 and V2 did nothing. Only V3 moved the metrics.
 
-How do you evaluate a new ranking policy offline? The naive way — replay it on logs from the current system — is biased. The old policy over-showed its favorites, so anything that disagrees with it looks bad, because the impressions it would have picked barely exist in the logs.
+Here's why. CLIP tells the model *what's in* the image. But a rarely used shape has too few clicks to learn what to *do* with that. The shared model fixes that: the busy shapes teach it how image content maps to taste, and the quiet shapes borrow it.
 
-Netflix's answer is inverse propensity scoring on a randomized slice. A small fraction of traffic picks artwork at random from a known distribution, and the probability of each impression is logged at serving time. Reweight each observation by 1/propensity and you get an unbiased estimate of what a candidate policy would have earned. Netflix says having propensities that are known by construction — not modeled after the fact — is the single biggest reason their offline numbers track online results.
+**Two ingredients that each look useless can be the whole answer together. Test combinations, not just parts.**
 
-In my rebuild the whole simulated log is randomized (propensity = 1/4 everywhere), which makes the estimator easy to see working. Whatever system you work on, this is the pattern: reserve a small randomized slice, log the propensities, and you've bought yourself a trustworthy offline metric.
+## How to grade a model without an A/B test
 
-## The linear probe: a $0 gate for new embeddings
+You can't judge a new model on logs from the old one. The old model mostly showed its favorites. Anything that disagrees with it looks bad, because its picks barely appear in the data.
 
-New embedding models show up constantly. A full trial — data pipeline, retraining, weeks of A/B traffic — is expensive. Netflix gates candidates with one cheap question: from the content embedding alone, can a *linear* model predict which asset wins under an unpersonalized policy?
+Netflix's fix: show artwork at random to a small slice of traffic, and write down the odds of each pick at the moment it's shown (the propensity). Then weight each result by 1 ÷ those odds (inverse propensity scoring). That gives a fair estimate of how any new model would have done.
 
-Keeping it linear is the point. If the embedding encodes the semantic drivers of appeal, a linear classifier finds them. If it doesn't, you're at chance, and you just saved yourself a failed experiment.
+It's the same logic as the geo lift tests I ran on the agency side. You buy a clean comparison with a small, deliberate dose of randomness.
 
-In my rebuild the probe hits 35.5% winner accuracy on cold-start movies vs the 25% random baseline, from the CLIP vector alone — modest, because winners are estimated from few impressions, but clearly above chance. Two cells of code. I'd use this pattern anywhere embeddings feed a bigger system.
+**Keep a small random slice and log the odds. It's the cheapest trustworthy metric you'll ever buy.**
 
-## Query-aware ranking, almost for free
+## A free check before an expensive test
 
-CLIP puts text and images in one space. So search-aware artwork is one extra term: blend the personalization score with the cosine between the CLIP embedding of the query and the CLIP embedding of the asset. Search "an explosion" and the ranker surfaces artwork that contains one. No new model, no new infrastructure — the same stored vectors, one similarity at scoring time.
+New image models come out all the time. Testing one properly takes weeks. Netflix asks one cheap question first: using only the image numbers, can a simple straight-line model (a linear probe) guess which artwork wins?
 
-This is the quiet argument for an embedding store. Once content vectors are computed and served from one place, each new use case is a configuration change, not a migration.
+If it can't, skip the expensive test. In my rebuild it picked the winner 35.5% of the time vs 25% for a coin flip. Modest, but clearly above chance.
 
-## What I'd tell you to remember
+**Gate expensive experiments with cheap checks.**
 
-1. **Cold-start is an information problem, not a data-volume problem.** The information was in the image the whole time; ID-based models just couldn't see it.
-2. **Ablate combinations, not just components.** Netflix's content features and model consolidation were each worthless alone and significant together. My rebuild shows the same: V1 and V2 ≈ 0, V3 +3% to +20%.
-3. **Randomize a slice and log propensities.** It's the cheapest path to offline metrics you can trust.
-4. **Gate expensive experiments with cheap probes.**
-5. **Center CLIP embeddings before using cosines.** Raw CLIP lives in a cone; unrelated items still have cosine ~0.3.
+## Search, almost for free
 
-The obvious extension is video: Netflix's MediaFM adds audio and captions to the visual signal, and it beat the visual-only embedding decisively. There's no public equivalent of their preview data, so my rebuild stops at images.
+CLIP puts text and images in the same space. So "show artwork that matches what the user searched" is one extra term. Search "an explosion" and explosions come up.
+
+![Query-aware ranking](https://raw.githubusercontent.com/ZFayFay/netflix-maps-replication/main/figures/fig4_query.png)
+
+No new model. Same stored numbers, one more comparison.
+
+## What to remember
+
+1. **Cold-start is an information problem.** The information was in the image all along. The old model just couldn't see it.
+2. **Test combinations, not just parts.** Each idea alone: noise. Together: +3% to +20%.
+3. **Log your odds.** A small random slice buys you honest offline numbers.
+4. **Check cheap before you test expensive.**
+5. **Center your embeddings.**
+
+The obvious next step is video. Netflix's newer model adds audio and captions to the image signal. There's no public data like it, so my rebuild stops at posters.
 
 ---
 
-*Full notebook and code: [github.com/ZFayFay/netflix-maps-replication](https://github.com/ZFayFay/netflix-maps-replication). All ideas belong to the Netflix authors — this is an independent educational rebuild of their [MAPS post](https://netflixtechblog.com/maps-netflixs-multimodal-asset-personalization-at-scale-32f96320785e).*
+*Notebook and code: [github.com/ZFayFay/netflix-maps-replication](https://github.com/ZFayFay/netflix-maps-replication). All ideas belong to the Netflix authors. This is an independent rebuild of their [MAPS post](https://netflixtechblog.com/maps-netflixs-multimodal-asset-personalization-at-scale-32f96320785e).*
